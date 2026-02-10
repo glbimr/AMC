@@ -143,7 +143,7 @@
         const SUPABASE_SUBMISSIONS_TABLE = 'quiz_submissions'; 
         const SUPABASE_QUESTIONS_TABLE = 'quiz_questions';
         const STATIC_QUIZ_UUID = '5f4b3d2c-1a0e-9f8d-7c6b-5a4e3d2c1b0a';
-        const SUPABASE_STATUS_TABLE = 'quiz_status'; // <<< ADDED: Supabase table for global status
+        const SUPABASE_STATUS_TABLE = 'quiz_status';
 
         // Initialize Supabase client
         const { createClient } = supabase;
@@ -156,23 +156,19 @@
         let studentInfo = {};
         let currentQuestionIndex = 0;
         let studentResponses = []; 
-        let questionStatus = []; // New array to track status: 0=unvisited, 1=viewed, 2=answered
-        let questionFlags = []; // New array to track flags: false=not flagged, true=flagged
+        let questionStatus = []; 
+        let questionFlags = []; 
         let timerInterval;
         
-        // MODIFIED: Total Quiz Time (10 minutes = 600 seconds)
         const TOTAL_QUIZ_TIME = 10 * 60; 
         let timeLeft = TOTAL_QUIZ_TIME; 
         let isTimerRunning = false; 
-        let isQuizSubmitted = false; // <<< ADDED: Flag to prevent violations after submission
+        let isQuizSubmitted = false; 
 
-        // ADDED: State to track question timing
         let questionTimings = [];
-        let currentQuestionStartTime = Date.now(); // Start time for the currently viewed question
-        // >>> END ADDED
+        let currentQuestionStartTime = Date.now(); 
 
-        // Allows Admin to globally toggle the quiz state
-        let isQuizActive = null; // <<< MODIFIED: Initialize as null, status will be fetched from DB
+        let isQuizActive = null; 
         
         let proctoringViolations = { total: 0, windowSwitch: 0, copyPaste: 0 };
         const MAX_VIOLATIONS = 3;
@@ -183,7 +179,6 @@
         let violationCooldown = false; 
         let extensionCheckInterval; 
         
-        // Universal Edge Thresholds for swipe detection
         const EDGE_THRESHOLD = 50; 
         const TOP_EDGE_THRESHOLD = 50; 
 
@@ -229,7 +224,6 @@
 
             APP_CONTAINER.innerHTML = '';
 
-            // Stop timer if switching away from the quiz
             if (viewName !== 'quiz') stopTotalTimer();
 
             if (viewName === 'signin') renderSignIn();
@@ -261,11 +255,13 @@
             setTimeout(() => { tempDiv.style.opacity = '0'; }, 4000);
         }
 
-        function saveResultLocally(name, email, admissionNo, score, totalQuestions, violations) {
+        function saveResultLocally(name, email, admissionNo, considerationFor, score, totalQuestions, violations) {
             const leaderboard = JSON.parse(localStorage.getItem('quizLeaderboard') || '[]');
             const percentageVal = ((score / totalQuestions) * 100).toFixed(2);
             const result = {
-                name, email, admissionNo, score, total: totalQuestions,
+                name, email, admissionNo, 
+                considerationFor, // Local storage save
+                score, total: totalQuestions,
                 percentage: percentageVal,
                 violations: violations.total, 
                 windowSwitchViolations: violations.windowSwitch, 
@@ -278,23 +274,17 @@
             return result; 
         }
 
-        // <<< ADDED: Function to fetch the global quiz active status
         async function fetchQuizActiveStatus() {
             try {
-                // Assuming you have a table 'quiz_status' with a single row and a column 'is_active' and ID=1
                 const { data, error } = await client
                     .from(SUPABASE_STATUS_TABLE)
                     .select('is_active')
                     .limit(1)
                     .single();
 
-                // PGRST116 is 'No rows returned' which can happen if the table is empty
                 if (error && error.code !== 'PGRST116') throw error; 
-                
-                // Default to true if no data found (safer approach)
                 isQuizActive = (data && data.is_active !== null) ? data.is_active : true; 
                 return isQuizActive;
-                
             } catch (e) {
                 console.error('Fetch Quiz Status Exception:', e);
                 showTempMessage("Failed to load quiz status. Assuming ON.", true);
@@ -302,11 +292,8 @@
                 return isQuizActive;
             }
         }
-        // END ADDED >>>
-
 
         // --- DATABASE UPLOAD LOGIC ---
-        // MODIFIED: Accepts detailedResponses (for student_responses_json) and timeLeftSeconds (for time_left_seconds)
         async function uploadResultToSupabase(resultData, detailedResponses, timeLeftSeconds) {
             const submissionUUID = generateUUID(); 
             const dataToInsert = {
@@ -322,10 +309,11 @@
                 student_name: resultData.name,
                 college_email: resultData.email,
                 admission_no: resultData.admissionNo,
-                // --- ADDED NEW FIELDS ---
+                // --- ADDED: NEW COLUMN ---
+                "Consideration for": resultData.considerationFor, // Quoted key for spaces
+                // --- END ADDED ---
                 time_left_seconds: timeLeftSeconds,
                 student_responses_json: detailedResponses,
-                // --- END ADDED NEW FIELDS ---
             };
             try {
                 const { error } = await client.from(SUPABASE_SUBMISSIONS_TABLE).insert([dataToInsert]); 
@@ -340,11 +328,10 @@
             }
         }
 
-        // --- QUESTION FETCH LOGIC (Dynamically loads Q&A) ---
+        // --- QUESTION FETCH LOGIC ---
         async function fetchQuizQuestionsFromSupabase() {
             LOADING_OVERLAY.style.display = 'flex';
             try {
-                // Fetch all required columns from your new table
                 const { data, error } = await client
                     .from(SUPABASE_QUESTIONS_TABLE)
                     .select('question, answer, option_a, option_b, option_c, option_d');
@@ -356,16 +343,14 @@
                     return false;
                 }
 
-                // Map the flat database data into the required JavaScript structure
                 quizQuestions = data.map(q => ({
                     question: q.question,
                     options: [q.option_a, q.option_b, q.option_c, q.option_d],
                     answer: q.answer
                 }));
                 
-                // Re-initialize state arrays
                 studentResponses = Array(quizQuestions.length).fill(null);
-                questionStatus = Array(quizQuestions.length).fill(0); // 0=unvisited
+                questionStatus = Array(quizQuestions.length).fill(0); 
                 questionFlags = Array(quizQuestions.length).fill(false);
 
                 return true;
@@ -377,8 +362,6 @@
                 LOADING_OVERLAY.style.display = 'none';
             }
         }
-        // --- END: QUESTION FETCH LOGIC ---
-
 
         // --- PROCTORING LOGIC ---
         function requestFullScreen() {
@@ -402,14 +385,14 @@
         }
         
         function showViolationModal(isTerminating, reason) {
-            if (isQuizSubmitted) return; // Important safety check
+            if (isQuizSubmitted) return; 
 
             if (isTerminating) {
                 VIOLATION_MESSAGE.innerHTML = `<p class="text-red-700 font-bold mb-2 text-lg">EXAM TERMINATED</p><p>You exceeded the limit of ${MAX_VIOLATIONS} violations. The exam will now be submitted.</p>`;
                 MODAL_CONFIRM_BTN.textContent = 'Submit Exam Now';
                 MODAL_CONFIRM_BTN.className = "w-full py-3 px-4 rounded-lg text-white font-bold bg-red-700 hover:bg-red-800 transition shadow-lg";
                 
-                stopTotalTimer(); // Changed to stopTotalTimer
+                stopTotalTimer(); 
                 disableProctoring(); 
                 exitFullScreen();
                 
@@ -441,9 +424,7 @@
                 MODAL_CONFIRM_BTN.className = "w-full py-3 px-4 rounded-lg text-white font-bold bg-yellow-600 hover:bg-yellow-700 transition shadow-md";
                 MODAL_CONFIRM_BTN.onclick = () => {
                     VIOLATION_MODAL.style.display = 'none';
-                    
                     extensionCheckInterval = setInterval(detectSpecificExtensionFootprints, EXTENSION_CHECK_INTERVAL); 
-                    
                     requestFullScreen(); 
                 };
             }
@@ -451,20 +432,15 @@
         }
 
         function handleProctoringViolation(type, reason) {
-            // <<< MODIFIED: Prevent all violations if quiz has been submitted
             if (isQuizSubmitted) return; 
-            // Prevent violation counting if the state is unstable (e.g. timeout or termination processing)
             if (currentQuestionIndex >= quizQuestions.length) return; 
-            // >>> END MODIFIED
             
             if (proctoringViolations.total >= MAX_VIOLATIONS) return; 
             
             if (type === 'windowSwitch') {
                 if (violationCooldown) return; 
-                
                 proctoringViolations.windowSwitch++; 
                 violationCooldown = true;
-                
                 setTimeout(() => { violationCooldown = false; }, WINDOW_SWITCH_COOLDOWN); 
             } 
             else if (type === 'copyPaste') {
@@ -480,7 +456,6 @@
             if (proctoringViolations.total >= MAX_VIOLATIONS) {
                 disableProctoring(); 
                 showViolationModal(true, reason); 
-                
             }
             else if (type === 'windowSwitch') {
                     showViolationModal(false, reason); 
@@ -488,15 +463,12 @@
         }
         
         function detectSpecificExtensionFootprints() {
-            if (currentQuestionIndex >= quizQuestions.length || violationCooldown || isQuizSubmitted) return; // Added isQuizSubmitted
+            if (currentQuestionIndex >= quizQuestions.length || violationCooldown || isQuizSubmitted) return; 
             
-            // Check 1: Known injected global properties from common extensions
             if (window.Stranalytics || window.adblocker || window.betterTranslate || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
                 handleProctoringViolation('windowSwitch', 'extension'); 
                 return;
             }
-
-            // Check 2: Check for existence of Chrome/Firefox extension APIs
             if (window.chrome && window.chrome.runtime) {
                 handleProctoringViolation('windowSwitch', 'extension');
                 return;
@@ -513,7 +485,7 @@
         };
 
         const touchStartHandler = (e) => {
-            if (currentQuestionIndex >= quizQuestions.length || isQuizSubmitted) return; // Added isQuizSubmitted
+            if (currentQuestionIndex >= quizQuestions.length || isQuizSubmitted) return; 
 
             if(e.touches && e.touches.length > 0) {
                 const touchX = e.touches[0].clientX;
@@ -573,7 +545,7 @@
             document.removeEventListener('keydown', screenshotKeyHandler); 
         }
 
-        // --- TIMER & NAVIGATION LOGIC (MODIFIED) ---
+        // --- TIMER & NAVIGATION LOGIC ---
 
         function updateTimerDisplay() {
             const progressBar = document.getElementById('progressBar');
@@ -592,13 +564,11 @@
                 timeLeft--;
                 updateTimerDisplay();
 
-                // Auto-submit on timeout
                 if (timeLeft <= 0) {
-                    isQuizSubmitted = true; // Set submitted flag for timeout auto-submit
+                    isQuizSubmitted = true; 
                     stopTotalTimer();
                     disableProctoring();
                     exitFullScreen();
-                    // Auto-submit on finish (wasTerminated=true for time-out)
                     calculateAndShowResults(true); 
                 }
             }, 1000);
@@ -609,36 +579,26 @@
             isTimerRunning = false;
         }
 
-        // New function to jump to a specific question (MODIFIED: Added time tracking)
         function jumpToQuestion(index) {
             if (index >= 0 && index < quizQuestions.length) {
-                // --- ADDED: TIME TRACKING FOR PREVIOUS QUESTION ---
                 const timeSpent = Math.max(0, Math.floor((Date.now() - currentQuestionStartTime) / 1000));
                 
-                // Log timing for the question we are leaving
                 if (currentQuestionIndex < quizQuestions.length) {
                     questionTimings[currentQuestionIndex] = timeSpent;
                 }
                 
-                // Update the current question index
                 currentQuestionIndex = index;
-                // Set the start time for the new question
                 currentQuestionStartTime = Date.now();
-                // --- END ADDED TIME TRACKING ---
-
-                // Before changing, ensure the current question's status is at least 'viewed' if not answered
-                // FIX: This should be for the question we are moving *from*, but the logic relies on index being *new* one here.
-                // Re-enabling the correct status logic:
+                
                 if (questionStatus[currentQuestionIndex] === 0) {
-                    questionStatus[currentQuestionIndex] = 1; // Mark as viewed
+                    questionStatus[currentQuestionIndex] = 1; 
                 }
                 
                 renderQuizQuestion();
-                renderQuestionPanel(); // Re-render panel to highlight current question
+                renderQuestionPanel(); 
             }
         }
         
-        // New function to handle next/previous button clicks
         function navigateQuestions(direction) {
             const newIndex = currentQuestionIndex + direction;
             if (newIndex >= 0 && newIndex < quizQuestions.length) {
@@ -648,24 +608,23 @@
         
         function saveCurrentAnswer(value) {
             studentResponses[currentQuestionIndex] = value;
-            questionStatus[currentQuestionIndex] = 2; // Mark as answered (green)
-            renderQuestionPanel(); // Update panel to show question as answered
+            questionStatus[currentQuestionIndex] = 2; 
+            renderQuestionPanel(); 
         }
         
-        // New function to toggle the flag status (MODIFIED: Added back showTempMessage for feedback)
         function toggleFlag() {
             questionFlags[currentQuestionIndex] = !questionFlags[currentQuestionIndex];
             
             const msg = questionFlags[currentQuestionIndex] ? 'Question Flagged for Review' : 'Flag Removed';
-            showTempMessage(msg); // ADDED: Visual feedback
+            showTempMessage(msg); 
             
-            renderQuizQuestion(); // Re-render to update the flag button state
-            renderQuestionPanel(); // Re-render to update the flag icon in the panel
+            renderQuizQuestion(); 
+            renderQuestionPanel(); 
         }
 
         // --- RENDERING VIEWS ---
 
-        async function renderSignIn() { // <<< MODIFIED: Function made async
+        async function renderSignIn() { 
             APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-md bg-white rounded-xl shadow-2xl p-8">
@@ -680,6 +639,16 @@
                         <div><label class="block text-sm font-medium text-gray-700">Name</label><input type="text" id="studentName" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Email</label><input type="email" id="collegeEmail" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
                         <div><label class="block text-sm font-medium text-gray-700">Admission No.</label><input type="text" id="admissionNo" required class="mt-1 block w-full px-4 py-2 border rounded-lg"></div>
+                        
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Consideration for</label>
+                            <select id="considerationFor" required class="mt-1 block w-full px-4 py-2 border rounded-lg bg-white">
+                                <option value="" disabled selected>Select an option</option>
+                                <option value="For Presentation">For Presentation</option>
+                                <option value="JAM">JAM</option>
+                                <option value="GD">GD</option>
+                            </select>
+                        </div>
                         <button type="submit" id="startQuizBtn" class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition mt-6 shadow-lg font-bold" disabled>Start Quiz</button>
                         
                         <button type="button" id="adminSignInButton" class="w-full py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition font-bold mt-2">
@@ -691,9 +660,7 @@
             const startQuizBtn = document.getElementById('startQuizBtn');
             const loadingIndicator = document.getElementById('loadingQuestionsIndicator');
 
-            // <<< MODIFICATION 1 (Adapted): Fetch questions concurrently. Removed status fetch here.
             const success = await fetchQuizQuestionsFromSupabase(); 
-            // END MODIFICATION 1 >>>
             
             if (loadingIndicator) loadingIndicator.style.display = 'none';
 
@@ -706,7 +673,6 @@
                 return;
             }
 
-            // <<< MODIFICATION 2: ADDED EMAIL DOMAIN RESTRICTION HERE >>>
             document.getElementById('signInForm').addEventListener('submit', function(e) { 
                 e.preventDefault();
                 
@@ -716,22 +682,21 @@
                 studentInfo = {
                     name: document.getElementById('studentName').value.trim(),
                     email: emailInput.value.trim().toLowerCase(), 
-                    admissionNo: document.getElementById('admissionNo').value.trim()
+                    admissionNo: document.getElementById('admissionNo').value.trim(),
+                    // --- ADDED: Capture Consideration Field ---
+                    considerationFor: document.getElementById('considerationFor').value 
+                    // --- END ADDED ---
                 };
 
-                // --- NEW VALIDATION LOGIC: Check for glbimr.org domain ---
                 if (!studentInfo.email.endsWith(requiredDomain)) {
                     showTempMessage(`Login restricted. Only emails from ${requiredDomain} are allowed.`, true);
-                    emailInput.value = ''; // Optionally clear the email field
+                    emailInput.value = ''; 
                     emailInput.focus(); 
-                    return; // STOP: Do not proceed to rules or quiz
+                    return; 
                 }
-                // --- END VALIDATION LOGIC ---
 
-                // Move to Proctoring Rules view after successful sign-in
                 setView('proctoringRules');
             });
-            // END MODIFICATION 2 >>>
             
             document.getElementById('adminSignInButton').onclick = () => setView('admin');
         }
@@ -773,9 +738,7 @@
             checkbox.onchange = () => { startBtn.disabled = !checkbox.checked; };
             cancelBtn.onclick = () => setView('signin');
 
-            // <<< MODIFICATION 3: Added async handler with quiz active status check
             startBtn.onclick = async () => {
-                // Ensure the button is disabled during the check to prevent double click
                 startBtn.disabled = true; 
                 startBtn.textContent = 'Checking quiz status...';
                 
@@ -784,31 +747,25 @@
                 if (!currentStatus) { 
                     showQuizOffModal(); 
                     startBtn.textContent = 'Agree & Start Quiz';
-                    startBtn.disabled = false; // Re-enable for another attempt if not terminated
+                    startBtn.disabled = false; 
                     return; 
                 }
                 
-                // If active, proceed with quiz start
                 shuffleArray(quizQuestions); 
                 requestFullScreen();
                 enableProctoring();
                 
-                // Initialize the first question's status as 'viewed' upon starting
                 if (quizQuestions.length > 0) {
                      questionStatus[0] = 1;
                 }
 
-                // --- ADDED: Initialize Timings ---
                 questionTimings = Array(quizQuestions.length).fill(0);
                 currentQuestionStartTime = Date.now();
-                // --- END ADDED ---
 
                 setView('quiz');
             };
-            // END MODIFICATION 3 >>>
         }
 
-        // Modified renderQuiz to accommodate the new structure (REMOVED LEGEND HERE)
         function renderQuiz() {
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
             APP_CONTAINER.innerHTML = `
@@ -832,31 +789,29 @@
                     </div>
                 </div>`;
                 
-            startTotalTimer(); // Start the total quiz timer
+            startTotalTimer(); 
             renderQuizQuestion();
             renderQuestionPanel();
             
-            // Event listener for flag button - CORRECTLY ATTACHED HERE
             const flagButton = document.getElementById('flagButton');
             if (flagButton) {
                 flagButton.onclick = toggleFlag;
             }
         }
 
-        // New function to render the Question Navigation Panel
         function renderQuestionPanel() {
             const panel = document.getElementById('questionPanel');
             if (!panel) return;
             
             panel.innerHTML = quizQuestions.map((q, index) => {
-                const status = questionStatus[index]; // 0=unvisited, 1=viewed, 2=answered
+                const status = questionStatus[index]; 
                 const isFlagged = questionFlags[index];
                 
                 let statusClass = 'unvisited'; 
-                if (status === 1) statusClass = 'viewed'; // Yellow
-                if (status === 2) statusClass = 'answered'; // Green
+                if (status === 1) statusClass = 'viewed'; 
+                if (status === 2) statusClass = 'answered'; 
                 
-                if (index === currentQuestionIndex) statusClass = 'current'; // Blue for current
+                if (index === currentQuestionIndex) statusClass = 'current'; 
 
                 return `
                     <button class="q-panel-btn ${statusClass} ${isFlagged ? 'flagged' : ''}" onclick="jumpToQuestion(${index})">
@@ -868,12 +823,11 @@
         }
 
 
-        // Modified renderQuizQuestion for state persistence, new navigation, and flag button update
         function renderQuizQuestion() {
             const q = quizQuestions[currentQuestionIndex];
             const quizContent = document.getElementById('quizContent');
             const qNumDisplay = document.getElementById('questionNumberDisplay');
-            const flagButton = document.getElementById('flagButton'); // Get button element
+            const flagButton = document.getElementById('flagButton'); 
 
             
             if(qNumDisplay) qNumDisplay.textContent = currentQuestionIndex + 1;
@@ -881,12 +835,10 @@
             const optionsToRender = [...q.options];
             shuffleArray(optionsToRender);
             
-            // Determine button visibility
             const isFirst = currentQuestionIndex === 0;
             const isLast = currentQuestionIndex === quizQuestions.length - 1;
             const isFlagged = questionFlags[currentQuestionIndex];
             
-            // Update Flag button display
             if (flagButton) {
                 if (isFlagged) {
                     flagButton.innerHTML = `<i class="fas fa-flag mr-2"></i> Flagged (Click to Unflag)`;
@@ -897,14 +849,12 @@
                 }
             }
 
-            // --- START: ADDED STUDENT INFO BLOCK ---
             const studentInfoBlock = `
                 <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 mb-6 text-sm">
                     <p class="font-bold text-gray-800">Student: <span class="font-normal text-indigo-700">${studentInfo.name || 'N/A'}</span></p>
                     <p class="font-bold text-gray-800">Admission No.: <span class="font-normal text-indigo-700">${studentInfo.admissionNo || 'N/A'}</span></p>
                 </div>
             `;
-            // --- END: ADDED STUDENT INFO BLOCK ---
 
             quizContent.innerHTML = `
                 ${studentInfoBlock}
@@ -943,9 +893,7 @@
 
             if (document.getElementById('submitButton')) {
                  document.getElementById('submitButton').onclick = () => {
-                    // <<< MODIFIED: Set flag before disabling
                     isQuizSubmitted = true; 
-                    // Confirmation pop-up removed to prevent proctoring violation.
                     stopTotalTimer();
                     disableProctoring();
                     exitFullScreen();
@@ -953,36 +901,32 @@
                 };
             }
             
-            renderQuestionPanel(); // Ensure panel reflects changes after navigating
+            renderQuestionPanel(); 
         }
 
-        // MODIFIED: Added logic to log final question time and compile detailed report
         async function calculateAndShowResults(wasTerminated) {
             LOADING_OVERLAY.style.display = 'flex';
             
-            // --- ADDED: Log time for the final question and compile detailed report ---
             const timeSpentFinal = Math.max(0, Math.floor((Date.now() - currentQuestionStartTime) / 1000));
-            if (currentQuestionIndex < quizQuestions.length) { // Check to ensure we are still within bounds
+            if (currentQuestionIndex < quizQuestions.length) { 
                 questionTimings[currentQuestionIndex] = timeSpentFinal;
             }
             
             let score = 0;
             quizQuestions.forEach((q, idx) => { if (studentResponses[idx] === q.answer) score++; });
             
-            // Create the detailed submission report JSON
             const detailedResponses = quizQuestions.map((q, idx) => ({
                 question_number: idx + 1,
-                question_text: q.question, // Include question text for easy report viewing
+                question_text: q.question, 
                 student_response: studentResponses[idx],
                 correct_answer: q.answer,
                 is_correct: studentResponses[idx] === q.answer,
-                time_spent_seconds: questionTimings[idx] || 0 // Use logged time or 0
+                time_spent_seconds: questionTimings[idx] || 0 
             }));
-            // --- END ADDED ---
 
-            const result = saveResultLocally(studentInfo.name, studentInfo.email, studentInfo.admissionNo, score, quizQuestions.length, proctoringViolations);
+            // Pass considerationFor to local storage save
+            const result = saveResultLocally(studentInfo.name, studentInfo.email, studentInfo.admissionNo, studentInfo.considerationFor, score, quizQuestions.length, proctoringViolations);
             
-            // MODIFIED: Pass detailedResponses and timeLeft to the upload function
             const uploadStatus = await uploadResultToSupabase(result, detailedResponses, timeLeft);
             
             LOADING_OVERLAY.style.display = 'none';
@@ -995,7 +939,6 @@
             const statusMsg = uploadStatus.success ? 'Saved to Database' : 'Upload Failed';
             const errorDetail = uploadStatus.success ? '' : `<p class="text-xs mt-2 text-red-600 font-bold break-words p-2 bg-red-50 rounded border border-red-200">${uploadStatus.message}</p>`;
 
-            // Icon HTML (Red emergency sign for termination/timeout, Green for submission)
             let mainIconHtml = '';
             if (wasTerminated) {
                 mainIconHtml = `
@@ -1011,7 +954,6 @@
                 `;
             }
             
-            // Submission Status Block
             const submissionStatusHtml = `
                 <div class="mb-6 p-3 rounded-lg ${statusClass} inline-block w-full">
                     <div class="flex items-center justify-center">
@@ -1021,7 +963,6 @@
                 </div>
             `;
             
-            // Student Info Block
             const studentInfoHtml = `
                 <div class="bg-gray-50 p-4 rounded-lg mb-6 border border-gray-200">
                     <p class="text-xl font-bold text-gray-900">${studentInfo.name}</p>
@@ -1029,7 +970,6 @@
                 </div>
             `;
             
-            // --- MODIFICATION: Reorder submission status and student info blocks ---
             APP_CONTAINER.className = "flex items-center justify-center min-h-screen p-4 bg-gray-50";
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-lg bg-white rounded-2xl shadow-2xl p-10 text-center">
@@ -1070,7 +1010,6 @@
                 const adminId = document.getElementById('adminId').value;
                 const adminPassword = document.getElementById('adminPassword').value;
                 
-                // --- SECURE LOGIN VIA SUPABASE RPC ---
                 try {
                     const { data, error } = await client.rpc('verify_admin_credentials', {
                         input_id: adminId,
@@ -1093,25 +1032,15 @@
                     console.error('Admin Login Exception:', e);
                     showTempMessage('An unexpected error occurred during login.', true);
                 }
-                // --- END SECURE LOGIN ---
             };
         }
 
-        // --- NEW: FUNCTION TO PRINT/SAVE AS PDF ---
         function saveReportAsPdf() {
-            // Set a print-specific title
             document.title = 'Quiz Report - ' + (document.querySelector('#reportContainer h2').textContent || 'Submission');
-
             window.print();
-            
-            // Restore original title after printing is initiated
             document.title = 'ISB Quiz-1'; 
-            
-            // NOTE: The user must select "Save as PDF" in their browser's print dialogue.
         }
-        // --- END NEW FUNCTION ---
 
-        // --- MODIFIED: FUNCTION TO RENDER DETAILED REPORT ---
         async function renderSubmissionReport(submissionId) {
             LOADING_OVERLAY.style.display = 'flex';
 
@@ -1126,12 +1055,9 @@
 
                 const reportData = data.student_responses_json || [];
 
-                // Calculate total time spent on questions 
                 const totalTimeSpent = reportData.reduce((sum, q) => sum + (q.time_spent_seconds || 0), 0);
-                const timeRemaining = data.time_left_seconds || 0;
                 const totalQuizDuration = TOTAL_QUIZ_TIME;
 
-                // Render the report view
                 APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
                 APP_CONTAINER.innerHTML = `
                     <div class="w-full max-w-6xl bg-white rounded-2xl shadow-xl p-8 mt-10" id="reportContainer">
@@ -1145,20 +1071,24 @@
                         
                         <h1 class="text-3xl font-bold text-indigo-700 mb-6 hidden print:block">Quiz Submission Report</h1>
 
-                        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-                            <div class="p-4 bg-gray-50 rounded-lg border">
+                        <div class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+                            <div class="p-4 bg-gray-50 rounded-lg border col-span-1">
                                 <p class="text-sm font-semibold text-gray-500">Student Name</p>
                                 <p class="text-xl font-bold text-gray-900">${data.student_name}</p>
                             </div>
-                            <div class="p-4 bg-gray-50 rounded-lg border">
+                            <div class="p-4 bg-gray-50 rounded-lg border col-span-1">
+                                <p class="text-sm font-semibold text-gray-500">Consideration For</p>
+                                <p class="text-lg font-bold text-indigo-700">${data['Consideration for'] || '-'}</p>
+                            </div>
+                            <div class="p-4 bg-gray-50 rounded-lg border col-span-1">
                                 <p class="text-sm font-semibold text-gray-500">Admission No.</p>
                                 <p class="text-xl font-bold text-gray-900">${data.admission_no}</p>
                             </div>
-                            <div class="p-4 bg-green-50 rounded-lg border border-green-200">
+                            <div class="p-4 bg-green-50 rounded-lg border border-green-200 col-span-1">
                                 <p class="text-sm font-semibold text-green-700">Score</p>
                                 <p class="text-xl font-bold text-green-900">${data.score} / ${data.total_questions} (${data.percentage}%)</p>
                             </div>
-                            <div class="p-4 bg-red-50 rounded-lg border border-red-200">
+                            <div class="p-4 bg-red-50 rounded-lg border border-red-200 col-span-1">
                                 <p class="text-sm font-semibold text-red-700">Total Violations</p>
                                 <p class="text-xl font-bold text-red-900">${data.total_violations}</p>
                             </div>
@@ -1182,19 +1112,18 @@
                         <h3 class="text-xl font-bold text-gray-800 mb-4">Question Breakdown</h3>
                         <div class="space-y-6">
                             ${reportData.map(q => {
-                                // Logic to determine status, class, and icon
                                 const isAnswered = q.student_response !== null && q.student_response !== undefined;
-                                let cardClass = 'bg-gray-100 border-gray-300'; // Default: Not Attempted (Light Tone)
+                                let cardClass = 'bg-gray-100 border-gray-300'; 
                                 let iconClass = 'fa-question-circle text-gray-600';
                                 let responseText = '<span class="italic text-gray-500">No Answer</span>';
                                 
                                 if (isAnswered) {
                                     responseText = q.student_response;
                                     if (q.is_correct) {
-                                        cardClass = 'bg-green-50 border-green-300'; // Correct (Green)
+                                        cardClass = 'bg-green-50 border-green-300'; 
                                         iconClass = 'fa-check-circle text-green-600';
                                     } else {
-                                        cardClass = 'bg-red-50 border-red-300'; // Incorrect (Red)
+                                        cardClass = 'bg-red-50 border-red-300'; 
                                         iconClass = 'fa-times-circle text-red-600';
                                     }
                                 }
@@ -1222,15 +1151,15 @@
             } catch (e) {
                 console.error('Error fetching submission report:', e);
                 showTempMessage(`Failed to load report: ${e.message}`, true);
-                setView('leaderboard'); // Return to leaderboard on error
+                setView('leaderboard'); 
             } finally {
                 LOADING_OVERLAY.style.display = 'none';
             }
         }
-        // --- END MODIFIED FUNCTION ---
 
-        async function renderLeaderboard() { // <<< MODIFIED: Function made async
+        async function renderLeaderboard() { 
             APP_CONTAINER.className = "flex items-start justify-center min-h-screen p-4 bg-gray-100";
+            // MODIFIED: Added TH for Consideration
             APP_CONTAINER.innerHTML = `
                 <div class="w-full max-w-6xl bg-white rounded-2xl shadow-xl p-8 mt-10">
                     <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
@@ -1265,31 +1194,29 @@
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">#</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Student & Email</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Adm No</th>
-                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Score</th>
+                                    <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Consideration</th> <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Score</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Violations</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Date</th>
                                     <th class="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Report</th> </tr>
                             </thead>
                             <tbody id="leaderboardBody" class="bg-white divide-y divide-gray-200">
-                                <tr><td colspan="7" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Loading Data...</p></td></tr>
+                                <tr><td colspan="8" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Loading Data...</p></td></tr>
                             </tbody>
                         </table>
                     </div>
                 </div>`;
 
-            // <<< MODIFICATION 4: Fetch status on load and update button
             await fetchQuizActiveStatus();
             const quizToggleBtn = document.getElementById('quizToggle');
 
             quizToggleBtn.disabled = false;
             quizToggleBtn.textContent = `Quiz: ${isQuizActive ? 'ON' : 'OFF'}`;
             quizToggleBtn.className = `px-4 py-2 text-white rounded-lg ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm`;
-            // END MODIFICATION 4 >>>
 
             const fetchAndRender = async () => {
                 const tbody = document.getElementById('leaderboardBody');
-                // MODIFIED: Colspan is 7
-                tbody.innerHTML = `<tr><td colspan="7" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Updating...</p></td></tr>`;
+                // MODIFIED: Colspan updated to 8
+                tbody.innerHTML = `<tr><td colspan="8" class="p-10 text-center"><div class="spinner mx-auto"></div><p class="text-gray-500">Updating...</p></td></tr>`;
                 const searchTerm = document.getElementById('searchInput').value.trim();
                 const sortValue = document.getElementById('sortSelect').value;
                 const dateFilter = document.getElementById('dateFilter').value;
@@ -1309,8 +1236,8 @@
                 try {
                     const { data, error } = await query;
                     if (error) throw error;
-                    // MODIFIED: Colspan is 7
-                    if (!data || data.length === 0) { tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-gray-500">No records found matching criteria.</td></tr>`; return; }
+                    // MODIFIED: Colspan updated to 8
+                    if (!data || data.length === 0) { tbody.innerHTML = `<tr><td colspan="8" class="p-6 text-center text-gray-500">No records found matching criteria.</td></tr>`; return; }
                     tbody.innerHTML = data.map((entry, i) => {
                         return `
                         <tr class="${i%2?'bg-gray-50':'bg-white'} hover:bg-gray-100 transition">
@@ -1322,6 +1249,9 @@
                             </td>
 
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${entry.admission_no || '-'}</td>
+                            
+                            <td class="px-6 py-4 whitespace-nowrap text-sm text-indigo-600 font-semibold">${entry['Consideration for'] || '-'}</td>
+                            
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900 font-bold">${entry.score} / ${entry.total_questions || 20}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm ${entry.total_violations>0?'text-red-600 font-bold':'text-green-600'}">${entry.total_violations || 0}</td>
                             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-400">${entry.submission_time ? new Date(entry.submission_time).toLocaleString() : 'N/A'}</td>
@@ -1329,13 +1259,11 @@
                                 <button onclick="renderSubmissionReport('${entry.id}')" class="text-indigo-600 hover:text-indigo-900 font-semibold text-xs py-1 px-3 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition">View Report</button>
                             </td> </tr>`;
                     }).join('');
-                    // MODIFIED: Colspan is 7
-                } catch (err) { console.error(err); tbody.innerHTML = `<tr><td colspan="7" class="p-6 text-center text-red-600">Error: ${err.message}</td></tr>`; }
+                } catch (err) { console.error(err); tbody.innerHTML = `<tr><td colspan="8" class="p-6 text-center text-red-600">Error: ${err.message}</td></tr>`; }
             };
 
             document.getElementById('homeBtn').onclick = () => setView('signin');
             
-            // <<< MODIFICATION 5: Toggle Quiz Status in Supabase
             quizToggleBtn.onclick = async () => { 
                 const newStatus = !isQuizActive; 
                 
@@ -1343,7 +1271,6 @@
                 quizToggleBtn.disabled = true;
 
                 try {
-                    // Update the single row (assuming ID=1 for the status row, as suggested in the setup)
                     const { error } = await client
                         .from(SUPABASE_STATUS_TABLE)
                         .update({ is_active: newStatus })
@@ -1359,12 +1286,10 @@
                 } finally {
                     LOADING_OVERLAY.style.display = 'none';
                     quizToggleBtn.disabled = false;
-                    // Update button text/color
                     quizToggleBtn.textContent = `Quiz: ${isQuizActive ? 'ON' : 'OFF'}`;
                     quizToggleBtn.className = `px-4 py-2 text-white rounded-lg ${isQuizActive ? 'bg-green-600' : 'bg-red-600'} text-sm`;
                 }
             };
-            // END MODIFICATION 5 >>>
 
             document.getElementById('refreshBtn').onclick = fetchAndRender;
             document.getElementById('sortSelect').addEventListener('change', fetchAndRender);
@@ -1377,16 +1302,13 @@
             fetchAndRender();
         }
 
-        // --- INIT ---
         document.addEventListener('DOMContentLoaded', () => {
             setView('signin');
             QUIZ_OFF_CONFIRM_BTN.onclick = () => { QUIZ_OFF_MODAL.style.display = 'none'; };
             
             const fsHandler = () => {
-                // <<< MODIFIED: Check if already submitted
                 if (isQuizSubmitted) return; 
                 
-                // If exiting fullscreen while quiz is active and modal is not showing, trigger a violation.
                 if (!document.fullscreenElement && !document.webkitFullscreenElement && currentQuestionIndex < quizQuestions.length && VIOLATION_MODAL.style.display !== 'flex' && proctoringViolations.total < MAX_VIOLATIONS) {
                     handleProctoringViolation('windowSwitch', 'blur'); 
                 }
